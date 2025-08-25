@@ -6,6 +6,11 @@
 
 set -euo pipefail
 
+# Container-optimized environment settings
+export DEBIAN_FRONTEND=noninteractive
+export APT_LISTCHANGES_FRONTEND=none
+export NEEDRESTART_MODE=a
+
 # Colors and logging
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; NC='\033[0m'
@@ -14,6 +19,15 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+
+# Container detection
+detect_container() {
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        return 0  # is container
+    else
+        return 1  # not container
+    fi
+}
 
 # -------------------------------------------------------------------------
 # SSL/TLS CERTIFICATE MANAGEMENT
@@ -25,8 +39,19 @@ setup_ssl_certificates() {
     mkdir -p ~/.config/code-server/certs
     
     # Install certbot for Let's Encrypt
-    sudo apt-get update
-    sudo apt-get install -y certbot python3-certbot-nginx
+    log_info "Installing SSL certificate tools..."
+    if detect_container; then
+        log_info "Container environment detected, using quiet installation"
+        sudo apt-get update -qq >/dev/null 2>&1 || {
+            log_warn "Package update failed, continuing anyway"
+        }
+        sudo apt-get install -y -qq certbot python3-certbot-nginx >/dev/null 2>&1 || {
+            log_warn "Certbot installation failed, SSL features may be limited"
+        }
+    else
+        sudo apt-get update
+        sudo apt-get install -y certbot python3-certbot-nginx
+    fi
     
     # Create self-signed certificate for local development
     create_self_signed_cert() {
@@ -203,10 +228,15 @@ case "${1:-}" in
 esac
 EOF
     chmod +x ~/.local/bin/code-server-certs
-    
-    # Create initial self-signed certificate
-    create_self_signed "localhost"
-    
+
+    # Create initial self-signed certificate using the generated script
+    log_info "Creating initial self-signed certificate..."
+    if ~/.local/bin/code-server-certs create-self localhost; then
+        log_success "Initial self-signed certificate created"
+    else
+        log_warn "Failed to create initial certificate, you can create it manually later"
+    fi
+
     log_success "SSL/TLS certificate management configured"
 }
 
