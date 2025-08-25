@@ -1314,27 +1314,50 @@ setup_pm2_enhanced() {
         npm install -g pm2
     fi
 
-    # Create PM2 ecosystem file
+    # Create PM2 ecosystem file with proper paths
+    local code_server_path=$(command -v code-server)
+    local config_path="$HOME/.config/code-server/config.yaml"
+
+    log_info "Code-server binary path: $code_server_path"
+    log_info "Config file path: $config_path"
+
+    # Verify code-server binary exists and is executable
+    if [[ ! -x "$code_server_path" ]]; then
+        log_error "Code-server binary not found or not executable: $code_server_path"
+        return 1
+    fi
+
+    # Verify config file exists
+    if [[ ! -f "$config_path" ]]; then
+        log_error "Config file not found: $config_path"
+        return 1
+    fi
+
     cat > ~/.config/code-server/ecosystem.config.js <<EOF
 module.exports = {
   apps: [{
     name: 'code-server',
-    script: '$(command -v code-server)',
-    args: '--config ~/.config/code-server/config.yaml',
+    script: '$code_server_path',
+    args: '--config $config_path',
     cwd: '$HOME',
     instances: 1,
     autorestart: true,
     watch: false,
     max_memory_restart: '1G',
+    restart_delay: 1000,
     env: {
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      HOME: '$HOME',
+      PATH: process.env.PATH
     },
     error_file: '$HOME/.local/share/code-server/logs/pm2-error.log',
     out_file: '$HOME/.local/share/code-server/logs/pm2-out.log',
     log_file: '$HOME/.local/share/code-server/logs/pm2-combined.log',
     time: true,
     max_restarts: 10,
-    min_uptime: '10s'
+    min_uptime: '10s',
+    kill_timeout: 5000,
+    listen_timeout: 10000
   }]
 };
 EOF
