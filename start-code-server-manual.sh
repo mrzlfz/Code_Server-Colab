@@ -32,26 +32,53 @@ detect_container() {
     fi
 }
 
-# Kill existing code-server processes
+# Kill existing code-server processes and clean up ports
 kill_existing_processes() {
     log_info "Checking for existing code-server processes..."
-    
+
+    # Kill code-server processes
     if pgrep -f "code-server" >/dev/null; then
         log_warn "Found existing code-server processes, terminating..."
         pkill -f "code-server" 2>/dev/null || true
         sleep 2
-        
+
         # Force kill if still running
         if pgrep -f "code-server" >/dev/null; then
             log_warn "Force killing remaining processes..."
             pkill -9 -f "code-server" 2>/dev/null || true
             sleep 1
         fi
-        
+
         log_success "Existing processes terminated"
     else
         log_info "No existing code-server processes found"
     fi
+
+    # Clean up ports that might be in use
+    local port="${BIND_ADDR##*:}"
+    log_info "Cleaning up port $port..."
+
+    if command -v lsof >/dev/null; then
+        local pids=$(lsof -t -i:"$port" 2>/dev/null || true)
+        if [[ -n "$pids" ]]; then
+            log_warn "Killing processes using port $port: $pids"
+            echo "$pids" | xargs kill -9 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+
+    # Also check common ports that might conflict
+    for check_port in 8080 8888; do
+        if [[ "$check_port" != "$port" ]]; then
+            if command -v lsof >/dev/null; then
+                local conflict_pids=$(lsof -t -i:"$check_port" 2>/dev/null || true)
+                if [[ -n "$conflict_pids" ]]; then
+                    log_warn "Found processes on conflicting port $check_port, killing..."
+                    echo "$conflict_pids" | xargs kill -9 2>/dev/null || true
+                fi
+            fi
+        fi
+    done
 }
 
 # Check port availability

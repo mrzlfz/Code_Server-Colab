@@ -918,6 +918,24 @@ create_config() {
 
     PASSWORD=$(generate_password)
 
+    # Clean up any processes using the target port
+    local port="${BIND_ADDR##*:}"
+    log_info "Cleaning up port $port before creating config..."
+
+    # Kill any existing code-server processes
+    pkill -f "code-server" 2>/dev/null || true
+
+    # Kill any processes using the target port
+    if command -v lsof >/dev/null; then
+        local pids=$(lsof -t -i:"$port" 2>/dev/null || true)
+        if [[ -n "$pids" ]]; then
+            log_warn "Killing processes using port $port: $pids"
+            echo "$pids" | xargs kill -9 2>/dev/null || true
+        fi
+    fi
+
+    sleep 2
+
     cat >~/.config/code-server/config.yaml <<EOF
 bind-addr: $BIND_ADDR
 auth: password

@@ -219,7 +219,10 @@ EOF
 # Step 5: Create working startup script
 create_working_startup() {
     log_info "=== Creating Working Startup Script ==="
-    
+
+    # Ensure directory exists
+    mkdir -p "$HOME/.local/bin"
+
     cat > "$HOME/.local/bin/start-code-server-working" <<'EOF'
 #!/bin/bash
 # Working Code-Server Startup Script
