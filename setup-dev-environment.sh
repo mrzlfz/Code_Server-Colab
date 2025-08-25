@@ -37,18 +37,55 @@ setup_terminal_enhancement() {
 
     # Install essential terminal tools
     log_info "Updating package lists..."
-    sudo apt-get update -qq
-    sudo apt-get install -y \
+
+    # Use container-optimized apt settings
+    export DEBIAN_FRONTEND=noninteractive
+    export APT_LISTCHANGES_FRONTEND=none
+
+    sudo apt-get update -qq 2>/dev/null || sudo apt-get update
+
+    # Install packages in groups to avoid conflicts
+    log_info "Installing terminal tools..."
+    sudo apt-get install -y -qq \
         zsh fish tmux screen \
         htop neofetch \
         tree fd-find ripgrep bat \
         git-extras tig \
-        nodejs npm python3-pip \
+        python3-pip \
         curl wget jq \
-        docker.io docker-compose \
-        build-essential || {
-        log_warn "Some packages failed to install, continuing with available packages..."
+        build-essential 2>/dev/null || {
+        log_warn "Some terminal packages failed to install, trying individual installation..."
+
+        # Try installing packages individually
+        for pkg in zsh fish tmux screen htop neofetch tree fd-find ripgrep bat git-extras tig python3-pip curl wget jq build-essential; do
+            if sudo apt-get install -y -qq "$pkg" 2>/dev/null; then
+                log_info "✓ Installed: $pkg"
+            else
+                log_warn "✗ Failed to install: $pkg"
+            fi
+        done
     }
+
+    # Handle Node.js separately to avoid conflicts
+    log_info "Checking Node.js installation..."
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+        log_success "Node.js and npm already available"
+        log_info "Node.js version: $(node --version)"
+        log_info "npm version: $(npm --version)"
+    else
+        log_warn "Node.js/npm not found, but skipping installation to avoid conflicts"
+        log_info "Node.js should be installed by the main setup script"
+    fi
+
+    # Handle Docker installation separately for containers
+    if [[ "$is_container" == "false" ]]; then
+        log_info "Installing Docker tools..."
+        sudo apt-get install -y -qq docker.io docker-compose 2>/dev/null || {
+            log_warn "Docker installation failed, continuing without Docker"
+        }
+    else
+        log_info "Skipping Docker installation in container environment"
+    fi
 
     # Install yq separately (not available in standard Ubuntu repos)
     if ! command -v yq >/dev/null 2>&1; then
@@ -162,15 +199,42 @@ EOF
 # -------------------------------------------------------------------------
 setup_debugging_support() {
     log_info "Setting up debugging support..."
-    
-    # Install debugging tools
-    sudo apt-get install -y \
-        gdb lldb \
-        python3-debugpy \
-        nodejs npm
-    
-    # Install Node.js debugging tools
-    npm install -g node-inspect
+
+    # Check if we're in a container environment
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+    fi
+
+    # Install basic debugging tools
+    log_info "Installing debugging tools..."
+    sudo apt-get install -y -qq gdb lldb 2>/dev/null || {
+        log_warn "Some debugging tools failed to install"
+        # Try individual installation
+        sudo apt-get install -y -qq gdb 2>/dev/null || log_warn "gdb installation failed"
+        sudo apt-get install -y -qq lldb 2>/dev/null || log_warn "lldb installation failed"
+    }
+
+    # Install Python debugging support via pip (not apt)
+    log_info "Installing Python debugging support..."
+    if command -v pip3 >/dev/null 2>&1; then
+        pip3 install --user debugpy 2>/dev/null || {
+            log_warn "Failed to install debugpy via pip3"
+        }
+    else
+        log_warn "pip3 not available, skipping Python debugging support"
+    fi
+
+    # Install Node.js debugging tools (if Node.js is available)
+    if command -v npm >/dev/null 2>&1; then
+        log_info "Installing Node.js debugging tools..."
+        npm install -g node-inspect 2>/dev/null || {
+            log_warn "Failed to install node-inspect, trying without -g flag"
+            npm install node-inspect 2>/dev/null || log_warn "node-inspect installation failed"
+        }
+    else
+        log_warn "npm not available, skipping Node.js debugging tools"
+    fi
     
     # Create debug configurations directory
     mkdir -p ~/.local/share/code-server/User/globalStorage
@@ -299,15 +363,30 @@ setup_development_tools() {
         is_container=true
     fi
 
-    # Database clients
-    sudo apt-get install -y \
-        mysql-client postgresql-client \
-        redis-tools mongodb-clients || {
-        log_warn "Some database clients failed to install, continuing..."
-    }
-    
+    # Database clients (install individually to avoid conflicts)
+    log_info "Installing database clients..."
+    for pkg in mysql-client postgresql-client redis-tools; do
+        if sudo apt-get install -y -qq "$pkg" 2>/dev/null; then
+            log_info "✓ Installed: $pkg"
+        else
+            log_warn "✗ Failed to install: $pkg"
+        fi
+    done
+
+    # MongoDB clients (might not be available in all repositories)
+    if sudo apt-get install -y -qq mongodb-clients 2>/dev/null; then
+        log_info "✓ Installed: mongodb-clients"
+    else
+        log_warn "✗ mongodb-clients not available in repositories"
+    fi
+
     # API testing tools
-    sudo apt-get install -y curl httpie
+    log_info "Installing API testing tools..."
+    sudo apt-get install -y -qq curl httpie 2>/dev/null || {
+        log_warn "Some API testing tools failed to install"
+        sudo apt-get install -y -qq curl 2>/dev/null || log_warn "curl installation failed"
+        sudo apt-get install -y -qq httpie 2>/dev/null || log_warn "httpie installation failed"
+    }
     
     # Container tools (skip in container environments)
     if [[ "$is_container" == "false" ]]; then
@@ -323,11 +402,14 @@ setup_development_tools() {
     fi
     
     # Build tools
-    sudo apt-get install -y \
-        make cmake \
-        gcc g++ \
-        python3-dev \
-        pkg-config
+    log_info "Installing build tools..."
+    for pkg in make cmake gcc g++ python3-dev pkg-config; do
+        if sudo apt-get install -y -qq "$pkg" 2>/dev/null; then
+            log_info "✓ Installed: $pkg"
+        else
+            log_warn "✗ Failed to install: $pkg"
+        fi
+    done
     
     log_success "Development tools configured"
 }
