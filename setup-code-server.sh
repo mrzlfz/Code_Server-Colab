@@ -73,6 +73,9 @@ handle_error() {
 setup_self_healing() {
     log_info "Setting up self-healing mechanisms..."
 
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
+
     # Create watchdog script
     cat > ~/.local/bin/code-server-watchdog <<'EOF'
 #!/bin/bash
@@ -172,6 +175,9 @@ EOF
 # Resource management and monitoring
 setup_resource_management() {
     log_info "Setting up resource management..."
+
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
 
     # Create resource monitoring script
     cat > ~/.local/bin/code-server-resources <<'EOF'
@@ -539,6 +545,9 @@ install_extensions() {
 create_extension_management_scripts() {
     log_info "Creating extension management scripts..."
 
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
+
     # Extension manager script
     cat > ~/.local/bin/code-server-extensions <<'EOF'
 #!/bin/bash
@@ -800,6 +809,9 @@ setup_logging_monitoring() {
     # Create log directories
     mkdir -p ~/.local/share/code-server/logs/{server,monitoring,backup}
 
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
+
     # Create log rotation script
     cat > ~/.local/bin/code-server-logrotate <<'EOF'
 #!/bin/bash
@@ -959,6 +971,9 @@ install_cloudflare_tunnel() {
 
     log_info "Installing Cloudflare Tunnel..."
 
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
+
     # Download cloudflared
     local arch="amd64"
     if [[ "$(uname -m)" == "aarch64" ]]; then
@@ -980,6 +995,9 @@ install_vscode_tunnel() {
     fi
 
     log_info "Installing VS Code Tunnel..."
+
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
 
     # Download VS Code CLI
     local arch="x64"
@@ -1062,6 +1080,9 @@ start_vscode_tunnel() {
 # Create tunnel management script
 create_tunnel_manager() {
     log_info "Creating tunnel management script..."
+
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
 
     cat > ~/.local/bin/code-server-tunnel <<'EOF'
 #!/bin/bash
@@ -1306,6 +1327,9 @@ setup_network_configuration() {
         log_warn "UFW not available, skipping firewall configuration"
     fi
 
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
+
     # Create network monitoring script
     cat > ~/.local/bin/code-server-network <<'EOF'
 #!/bin/bash
@@ -1499,6 +1523,9 @@ setup_nohup_enhanced() {
     echo $! > "$pid_file"
     log_info "Code-server started with PID $(cat $pid_file)"
 
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
+
     # Create stop script
     cat > ~/.local/bin/code-server-stop <<EOF
 #!/bin/bash
@@ -1618,6 +1645,9 @@ verify_code_server() {
 # -------------------------------------------------------------------------
 create_service_scripts() {
     log_info "Creating service management scripts..."
+
+    # Ensure ~/.local/bin directory exists
+    mkdir -p ~/.local/bin
 
     # Create status script
     cat > ~/.local/bin/code-server-status <<'EOF'
