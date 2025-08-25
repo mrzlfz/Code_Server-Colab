@@ -20,7 +20,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; NC='\033[0m' # No Color
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
-log_success() { echo -e "${GREEN}[SUCCESS]NC} $*"; }
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
@@ -1251,16 +1251,36 @@ kill_process_on_port() {
     local port_to_check="${1##*:}"
     log_info "Mengecek port $port_to_check sebelum memulai server..."
 
-    # Cari PID yang menggunakan port. Opsi -t hanya menampilkan PID.
-    local pid_to_kill
-    pid_to_kill=$(lsof -t -i:"$port_to_check" 2>/dev/null)
+    # Try multiple methods to find processes using the port
+    local pid_to_kill=""
 
-    if [[ -n "$pid_to_kill" ]]; then
+    # Method 1: Try lsof with timeout (preferred)
+    if command_exists lsof; then
+        log_info "Menggunakan lsof untuk mengecek port..."
+        pid_to_kill=$(timeout 5 lsof -t -i:"$port_to_check" 2>/dev/null || true)
+    fi
+
+    # Method 2: Try netstat as fallback
+    if [[ -z "$pid_to_kill" ]] && command_exists netstat; then
+        log_info "Menggunakan netstat sebagai fallback..."
+        pid_to_kill=$(netstat -tlnp 2>/dev/null | grep ":$port_to_check " | awk '{print $7}' | cut -d'/' -f1 | head -1 || true)
+    fi
+
+    # Method 3: Try ss as another fallback
+    if [[ -z "$pid_to_kill" ]] && command_exists ss; then
+        log_info "Menggunakan ss sebagai fallback..."
+        pid_to_kill=$(ss -tlnp 2>/dev/null | grep ":$port_to_check " | sed 's/.*pid=\([0-9]*\).*/\1/' | head -1 || true)
+    fi
+
+    if [[ -n "$pid_to_kill" && "$pid_to_kill" != "0" ]]; then
         log_warn "Port $port_to_check sudah digunakan oleh proses PID: $pid_to_kill."
         log_warn "Mematikan proses tersebut secara paksa (kill -9)..."
-        kill -9 "$pid_to_kill"
-        sleep 1 # Beri jeda 1 detik agar OS melepaskan port
-        log_success "Proses pada port $port_to_check berhasil dimatikan."
+        if kill -9 "$pid_to_kill" 2>/dev/null; then
+            sleep 1 # Beri jeda 1 detik agar OS melepaskan port
+            log_success "Proses pada port $port_to_check berhasil dimatikan."
+        else
+            log_warn "Gagal mematikan proses $pid_to_kill, mungkin sudah tidak aktif."
+        fi
     else
         log_info "Port $port_to_check bebas untuk digunakan."
     fi
@@ -1396,8 +1416,18 @@ EOS"
 
 # Main start function with enhanced process management
 start_code_server() {
+    # Check if we're in a container environment
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+        log_warn "Container environment detected, using container-optimized settings"
+    fi
+
     # Panggil fungsi untuk membersihkan port sebelum melanjutkan
-    kill_process_on_port "$BIND_ADDR"
+    log_info "Membersihkan port sebelum memulai server..."
+    if ! kill_process_on_port "$BIND_ADDR"; then
+        log_warn "Port cleanup failed, but continuing anyway..."
+    fi
 
     log_info "Menjalankan code‑server dengan $PROCESS_MANAGER …"
     case "$PROCESS_MANAGER" in
@@ -1587,6 +1617,52 @@ pkill -f "code-server" 2>/dev/null || true
 echo "All code-server processes stopped"
 EOF
     chmod +x ~/.local/bin/code-server-stop
+
+    # Create debug script
+    cat > ~/.local/bin/code-server-debug <<'EOF'
+#!/bin/bash
+echo "=== Code-Server Debug Information ==="
+echo "Date: $(date)"
+echo "User: $(whoami)"
+echo "Home: $HOME"
+echo "PWD: $(pwd)"
+echo "Container: $(if [[ -f /.dockerenv ]]; then echo "Yes"; else echo "No"; fi)"
+echo ""
+echo "=== System Information ==="
+echo "OS: $(uname -a)"
+echo "Memory: $(free -h | grep '^Mem:' || echo 'free command not available')"
+echo "Disk: $(df -h $HOME | tail -1 || echo 'df command not available')"
+echo ""
+echo "=== Process Information ==="
+echo "Code-server processes:"
+ps aux | grep '[c]ode-server' || echo "No code-server processes found"
+echo ""
+echo "Port usage:"
+if command -v netstat >/dev/null; then
+    netstat -tlnp | grep ':8080\|:8888' || echo "No processes on ports 8080/8888"
+elif command -v ss >/dev/null; then
+    ss -tlnp | grep ':8080\|:8888' || echo "No processes on ports 8080/8888"
+else
+    echo "No network tools available"
+fi
+echo ""
+echo "=== Configuration ==="
+if [[ -f ~/.config/code-server/config.yaml ]]; then
+    echo "Config file exists:"
+    cat ~/.config/code-server/config.yaml
+else
+    echo "Config file not found"
+fi
+echo ""
+echo "=== Recent Logs ==="
+if [[ -f ~/.local/share/code-server/logs/server.log ]]; then
+    echo "Last 10 lines of server log:"
+    tail -10 ~/.local/share/code-server/logs/server.log
+else
+    echo "No server log found"
+fi
+EOF
+    chmod +x ~/.local/bin/code-server-debug
 
     log_success "Service management scripts created in ~/.local/bin/"
 }
