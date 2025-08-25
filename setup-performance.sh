@@ -91,21 +91,31 @@ apply_optimizations() {
         }' "$settings_file" > "$settings_file.tmp" && mv "$settings_file.tmp" "$settings_file"
     fi
     
-    # System-level optimizations (if possible)
-    if [[ $EUID -eq 0 ]]; then
+    # System-level optimizations (only if not in container and running as root)
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+    fi
+
+    if [[ "$is_container" == "false" && $EUID -eq 0 ]]; then
         # Increase file descriptor limits
         echo "* soft nofile 65536" >> /etc/security/limits.conf
         echo "* hard nofile 65536" >> /etc/security/limits.conf
-        
+
         # Optimize kernel parameters
         echo "vm.swappiness=10" >> /etc/sysctl.conf
         echo "net.core.rmem_max=16777216" >> /etc/sysctl.conf
         echo "net.core.wmem_max=16777216" >> /etc/sysctl.conf
-        
-        sysctl -p
-        echo "✓ System-level optimizations applied"
+
+        if sysctl -p >/dev/null 2>&1; then
+            echo "✓ System-level optimizations applied"
+        else
+            echo "⚠️  Some system optimizations failed"
+        fi
+    elif [[ "$is_container" == "true" ]]; then
+        echo "⚠️  Skipping system-level optimizations in container environment"
     else
-        echo "⚠️  Run as root for system-level optimizations"
+        echo "⚠️  Run as root for system-level optimizations (non-container only)"
     fi
     
     echo "✓ Performance optimizations applied"
@@ -881,8 +891,13 @@ show_help() {
 apply_optimizations() {
     echo "Applying network optimizations..."
 
-    # TCP optimizations (if running as root)
-    if [[ $EUID -eq 0 ]]; then
+    # TCP optimizations (only if not in container and running as root)
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+    fi
+
+    if [[ "$is_container" == "false" && $EUID -eq 0 ]]; then
         # Increase TCP buffer sizes
         echo "net.core.rmem_max = 16777216" >> /etc/sysctl.conf
         echo "net.core.wmem_max = 16777216" >> /etc/sysctl.conf
@@ -896,11 +911,15 @@ apply_optimizations() {
         echo "net.ipv4.tcp_tw_reuse = 1" >> /etc/sysctl.conf
 
         # Apply changes
-        sysctl -p
-
-        echo "✓ System-level network optimizations applied"
+        if sysctl -p >/dev/null 2>&1; then
+            echo "✓ System-level network optimizations applied"
+        else
+            echo "⚠️  Some network optimizations failed"
+        fi
+    elif [[ "$is_container" == "true" ]]; then
+        echo "⚠️  Skipping system-level network optimizations in container environment"
     else
-        echo "⚠️  Run as root for system-level optimizations"
+        echo "⚠️  Run as root for system-level optimizations (non-container only)"
     fi
 
     # Application-level optimizations

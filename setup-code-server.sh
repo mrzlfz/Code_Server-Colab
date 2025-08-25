@@ -1462,32 +1462,92 @@ start_code_server() {
 # -------------------------------------------------------------------------
 verify_code_server() {
     log_info "Mengecek status code‑server …"
-    if [[ "$PROCESS_MANAGER" == "pm2" ]]; then
-        pm2 status code-server | grep -q online || {
-            log_error "code‑server tidak online (pm2)"
-            return 1
-        }
-    elif [[ "$PROCESS_MANAGER" == "nohup" ]]; then
-        pgrep -f "code-server" >/dev/null || {
-            log_error "code‑server tidak ditemukan (nohup)"
-            return 1
-        }
-    elif [[ "$PROCESS_MANAGER" == "supervisor" ]]; then
-        sudo supervisorctl status code-server | grep -q RUNNING || {
-            log_error "code‑server tidak RUNNING (supervisor)"
-            return 1
-        }
+
+    # Check if we're in a container environment
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
     fi
+
+    local process_running=false
+
+    if [[ "$PROCESS_MANAGER" == "pm2" ]]; then
+        if pm2 status code-server 2>/dev/null | grep -q online; then
+            log_success "code‑server online (pm2)"
+            process_running=true
+        else
+            log_error "code‑server tidak online (pm2)"
+            log_info "Mencoba restart PM2..."
+
+            # Try to restart PM2 in container-friendly way
+            if [[ "$is_container" == "true" ]]; then
+                log_info "Container detected, trying alternative startup..."
+                pm2 delete code-server 2>/dev/null || true
+                pm2 start ~/.config/code-server/ecosystem.config.js 2>/dev/null || {
+                    log_warn "PM2 startup failed, trying direct startup..."
+                    return 1
+                }
+                sleep 3
+                if pm2 status code-server 2>/dev/null | grep -q online; then
+                    log_success "PM2 restart successful"
+                    process_running=true
+                fi
+            fi
+        fi
+    elif [[ "$PROCESS_MANAGER" == "nohup" ]]; then
+        if pgrep -f "code-server" >/dev/null; then
+            log_success "code‑server ditemukan (nohup)"
+            process_running=true
+        else
+            log_error "code‑server tidak ditemukan (nohup)"
+        fi
+    elif [[ "$PROCESS_MANAGER" == "supervisor" ]]; then
+        if sudo supervisorctl status code-server 2>/dev/null | grep -q RUNNING; then
+            log_success "code‑server RUNNING (supervisor)"
+            process_running=true
+        else
+            log_error "code‑server tidak RUNNING (supervisor)"
+        fi
+    fi
+
+    # Test HTTP connectivity
     PORT="${BIND_ADDR##*:}"
-    for i in {1..5}; do
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:"$PORT" || echo "000")
+    log_info "Testing HTTP connectivity on port $PORT..."
+
+    for i in {1..10}; do
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:"$PORT" 2>/dev/null || echo "000")
         if [[ "$HTTP_STATUS" -ge 200 && "$HTTP_STATUS" -lt 400 ]]; then
             log_success "code‑server merespon HTTP (status $HTTP_STATUS) pada port $PORT"
             return 0
         fi
-        sleep 1
+        log_info "Attempt $i/10: HTTP status $HTTP_STATUS, retrying..."
+        sleep 2
     done
+
     log_error "Tidak bisa mengakses code‑server melalui HTTP pada port $PORT"
+
+    # Provide debugging information
+    log_info "Debugging information:"
+    log_info "Process manager: $PROCESS_MANAGER"
+    log_info "Bind address: $BIND_ADDR"
+    log_info "Container environment: $is_container"
+
+    # Show process status
+    if pgrep -f "code-server" >/dev/null; then
+        log_info "Code-server processes found:"
+        ps aux | grep '[c]ode-server' || true
+    else
+        log_warn "No code-server processes found"
+    fi
+
+    # Show port usage
+    log_info "Port $PORT usage:"
+    if command -v netstat >/dev/null; then
+        netstat -tlnp 2>/dev/null | grep ":$PORT " || echo "Port $PORT not in use"
+    elif command -v ss >/dev/null; then
+        ss -tlnp 2>/dev/null | grep ":$PORT " || echo "Port $PORT not in use"
+    fi
+
     return 1
 }
 
