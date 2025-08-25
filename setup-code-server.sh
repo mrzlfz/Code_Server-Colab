@@ -5,7 +5,7 @@
 #
 #   * Meng‑install dependencies, Node.js, code‑server
 #   * Menyiapkan ngrok (download otomatis, auth token optional)
-#   * Menonaktifkan/men-skip konfigurasi UFW bila tidak dapat di‑root
+#   * Menggunakan tunnel untuk akses eksternal (ngrok, cloudflare, dll)
 #   * Verifikasi bahwa code‑server sudah berjalan
 #   * Otomatis mematikan proses lain yang menggunakan port yang sama
 #   * Penanganan Error Otomatis dengan Logging Detail
@@ -748,7 +748,7 @@ install_dependencies() {
     sudo apt-get update -y
     sudo apt-get install -y \
         curl wget git build-essential pkg-config lsof \
-        python3 python3-pip nginx ufw openssl jq htop unzip
+        python3 python3-pip openssl jq htop unzip
     log_success "Paket sistem selesai di‑install"
 }
 
@@ -1240,208 +1240,9 @@ EOF
     log_success "SSH server configured"
 }
 
-# Reverse Proxy Setup (Nginx)
-setup_reverse_proxy() {
-    log_info "Setting up reverse proxy (Nginx)..."
 
-    # Install Nginx
-    sudo apt-get update
-    sudo apt-get install -y nginx
 
-    # Create code-server site configuration
-    local port="${BIND_ADDR##*:}"
-    sudo tee /etc/nginx/sites-available/code-server >/dev/null <<EOF
-server {
-    listen 80;
-    server_name _;
 
-    # Security headers
-    add_header X-Frame-Options DENY;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
-
-    # Proxy to code-server
-    location / {
-        proxy_pass http://127.0.0.1:$port;
-        proxy_set_header Host \$http_host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-
-        # WebSocket support
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection upgrade;
-        proxy_set_header Accept-Encoding gzip;
-
-        # Timeouts
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-    }
-
-    # Health check endpoint
-    location /health {
-        access_log off;
-        return 200 "healthy\n";
-        add_header Content-Type text/plain;
-    }
-}
-EOF
-
-    # Enable the site
-    sudo ln -sf /etc/nginx/sites-available/code-server /etc/nginx/sites-enabled/
-    sudo rm -f /etc/nginx/sites-enabled/default
-
-    # Test and reload Nginx
-    if sudo nginx -t; then
-        sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload 2>/dev/null || true
-        log_success "Nginx reverse proxy configured"
-    else
-        log_error "Nginx configuration test failed"
-    fi
-}
-
-# Network Configuration
-setup_network_configuration() {
-    log_info "Setting up network configuration..."
-
-    # Check if we're in a container environment
-    local is_container=false
-    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
-        is_container=true
-        log_warn "Container environment detected, skipping system-level network configuration"
-    fi
-
-    # Configure UFW firewall only if not in container and have root access
-    if [[ "$is_container" == "false" ]] && command_exists ufw && [[ $EUID -eq 0 || -n "${SUDO_USER:-}" ]]; then
-        log_info "Configuring UFW firewall..."
-
-        # Test if UFW can actually work
-        if sudo ufw status >/dev/null 2>&1; then
-            # Allow SSH
-            sudo ufw allow ssh
-
-            # Allow HTTP/HTTPS
-            sudo ufw allow 80/tcp
-            sudo ufw allow 443/tcp
-
-            # Allow code-server port
-            local port="${BIND_ADDR##*:}"
-            sudo ufw allow "$port/tcp"
-
-            # Enable UFW (with --force to avoid interactive prompt)
-            sudo ufw --force enable
-
-            log_success "UFW firewall configured"
-        else
-            log_warn "UFW cannot be configured (insufficient permissions or container environment)"
-        fi
-    else
-        if [[ "$is_container" == "true" ]]; then
-            log_warn "Skipping UFW configuration in container environment"
-        elif ! command_exists ufw; then
-            log_warn "UFW not available, skipping firewall configuration"
-        else
-            log_warn "Insufficient permissions for UFW configuration, skipping"
-        fi
-    fi
-
-    # Ensure ~/.local/bin directory exists
-    mkdir -p ~/.local/bin
-
-    # Create network monitoring script
-    cat > ~/.local/bin/code-server-network <<'EOF'
-#!/bin/bash
-show_help() {
-    echo "Code-Server Network Monitor"
-    echo "Usage: $0 [command]"
-    echo ""
-    echo "Commands:"
-    echo "  status    Show network status"
-    echo "  ports     Show open ports"
-    echo "  test      Test connectivity"
-    echo "  firewall  Show firewall status"
-    echo ""
-}
-
-show_status() {
-    echo "=== Network Status ==="
-    echo "Hostname: $(hostname)"
-    echo "IP Addresses:"
-    ip addr show | grep "inet " | awk '{print "  " $2}' | grep -v "127.0.0.1"
-    echo ""
-    echo "Active Connections:"
-    netstat -tlnp 2>/dev/null | grep ":80\|:443\|:8080\|:8888\|:22" || ss -tlnp | grep ":80\|:443\|:8080\|:8888\|:22"
-}
-
-show_ports() {
-    echo "=== Open Ports ==="
-    if command -v netstat >/dev/null; then
-        netstat -tlnp | grep LISTEN
-    else
-        ss -tlnp | grep LISTEN
-    fi
-}
-
-test_connectivity() {
-    echo "=== Connectivity Test ==="
-
-    # Test local code-server
-    local port=$(grep "bind-addr:" ~/.config/code-server/config.yaml 2>/dev/null | cut -d: -f3 | tr -d ' ' || echo "8080")
-    if curl -s -f "http://127.0.0.1:$port/healthz" >/dev/null; then
-        echo "✓ Code-server responding on port $port"
-    else
-        echo "✗ Code-server not responding on port $port"
-    fi
-
-    # Test external connectivity
-    if curl -s -f "http://httpbin.org/ip" >/dev/null; then
-        echo "✓ External connectivity working"
-    else
-        echo "✗ External connectivity failed"
-    fi
-}
-
-show_firewall() {
-    echo "=== Firewall Status ==="
-    if command -v ufw >/dev/null; then
-        sudo ufw status verbose
-    elif command -v iptables >/dev/null; then
-        sudo iptables -L -n
-    else
-        echo "No firewall tools found"
-    fi
-}
-
-# Main command handling
-case "${1:-status}" in
-    "status")
-        show_status
-        ;;
-    "ports")
-        show_ports
-        ;;
-    "test")
-        test_connectivity
-        ;;
-    "firewall")
-        show_firewall
-        ;;
-    "help"|"-h"|"--help")
-        show_help
-        ;;
-    *)
-        echo "Unknown command: $1"
-        show_help
-        exit 1
-        ;;
-esac
-EOF
-    chmod +x ~/.local/bin/code-server-network
-
-    log_success "Network configuration completed"
-}
 
 # -------------------------------------------------------------------------
 # FUNGSI UNTUK MEMBERSIHKAN PORT
@@ -1805,8 +1606,6 @@ main() {
     create_extension_management_scripts
     create_tunnel_manager
     setup_ssh_server
-    setup_reverse_proxy
-    setup_network_configuration
     create_service_scripts
     start_code_server
 
