@@ -1306,25 +1306,45 @@ EOF
 setup_network_configuration() {
     log_info "Setting up network configuration..."
 
-    # Configure UFW firewall
-    if command_exists ufw; then
-        # Allow SSH
-        sudo ufw allow ssh
+    # Check if we're in a container environment
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+        log_warn "Container environment detected, skipping system-level network configuration"
+    fi
 
-        # Allow HTTP/HTTPS
-        sudo ufw allow 80/tcp
-        sudo ufw allow 443/tcp
+    # Configure UFW firewall only if not in container and have root access
+    if [[ "$is_container" == "false" ]] && command_exists ufw && [[ $EUID -eq 0 || -n "${SUDO_USER:-}" ]]; then
+        log_info "Configuring UFW firewall..."
 
-        # Allow code-server port
-        local port="${BIND_ADDR##*:}"
-        sudo ufw allow "$port/tcp"
+        # Test if UFW can actually work
+        if sudo ufw status >/dev/null 2>&1; then
+            # Allow SSH
+            sudo ufw allow ssh
 
-        # Enable UFW (with --force to avoid interactive prompt)
-        sudo ufw --force enable
+            # Allow HTTP/HTTPS
+            sudo ufw allow 80/tcp
+            sudo ufw allow 443/tcp
 
-        log_success "UFW firewall configured"
+            # Allow code-server port
+            local port="${BIND_ADDR##*:}"
+            sudo ufw allow "$port/tcp"
+
+            # Enable UFW (with --force to avoid interactive prompt)
+            sudo ufw --force enable
+
+            log_success "UFW firewall configured"
+        else
+            log_warn "UFW cannot be configured (insufficient permissions or container environment)"
+        fi
     else
-        log_warn "UFW not available, skipping firewall configuration"
+        if [[ "$is_container" == "true" ]]; then
+            log_warn "Skipping UFW configuration in container environment"
+        elif ! command_exists ufw; then
+            log_warn "UFW not available, skipping firewall configuration"
+        else
+            log_warn "Insufficient permissions for UFW configuration, skipping"
+        fi
     fi
 
     # Ensure ~/.local/bin directory exists

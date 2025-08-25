@@ -370,15 +370,35 @@ apply_hardening() {
     echo "✓ File permissions hardened"
     
     # System hardening (if possible)
-    if [[ $EUID -eq 0 ]]; then
-        # Disable unused network protocols
-        echo "net.ipv4.conf.all.send_redirects = 0" >> /etc/sysctl.conf
-        echo "net.ipv4.conf.default.send_redirects = 0" >> /etc/sysctl.conf
-        echo "net.ipv4.conf.all.accept_redirects = 0" >> /etc/sysctl.conf
-        echo "net.ipv4.conf.default.accept_redirects = 0" >> /etc/sysctl.conf
-        
-        sysctl -p
-        echo "✓ System hardening applied"
+    # Check if we're in a container environment
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+    fi
+
+    if [[ $EUID -eq 0 ]] && [[ "$is_container" == "false" ]]; then
+        # Test if sysctl can write (not read-only filesystem)
+        if echo "# Test write" >> /etc/sysctl.conf 2>/dev/null; then
+            # Remove test line
+            sed -i '/# Test write/d' /etc/sysctl.conf 2>/dev/null
+
+            # Disable unused network protocols
+            echo "net.ipv4.conf.all.send_redirects = 0" >> /etc/sysctl.conf
+            echo "net.ipv4.conf.default.send_redirects = 0" >> /etc/sysctl.conf
+            echo "net.ipv4.conf.all.accept_redirects = 0" >> /etc/sysctl.conf
+            echo "net.ipv4.conf.default.accept_redirects = 0" >> /etc/sysctl.conf
+
+            # Apply settings if possible
+            if sysctl -p >/dev/null 2>&1; then
+                echo "✓ System hardening applied"
+            else
+                echo "⚠️  System hardening configured but may require reboot"
+            fi
+        else
+            echo "⚠️  Cannot modify sysctl.conf (read-only filesystem)"
+        fi
+    elif [[ "$is_container" == "true" ]]; then
+        echo "⚠️  Skipping system hardening in container environment"
     else
         echo "⚠️  Run as root for system-level hardening"
     fi
