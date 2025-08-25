@@ -20,23 +20,62 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 # -------------------------------------------------------------------------
 setup_terminal_enhancement() {
     log_info "Setting up enhanced terminal environment..."
-    
+
+    # Check if we're in a container environment
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+        log_warn "Container environment detected, using container-optimized settings"
+    fi
+
+    # Ensure ~/.local/bin exists and is in PATH
+    mkdir -p ~/.local/bin
+    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+        export PATH="$HOME/.local/bin:$PATH"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+    fi
+
     # Install essential terminal tools
-    sudo apt-get update
+    log_info "Updating package lists..."
+    sudo apt-get update -qq
     sudo apt-get install -y \
         zsh fish tmux screen \
-        htop btop neofetch \
+        htop neofetch \
         tree fd-find ripgrep bat \
         git-extras tig \
         nodejs npm python3-pip \
-        curl wget jq yq \
+        curl wget jq \
         docker.io docker-compose \
-        build-essential
+        build-essential || {
+        log_warn "Some packages failed to install, continuing with available packages..."
+    }
+
+    # Install yq separately (not available in standard Ubuntu repos)
+    if ! command -v yq >/dev/null 2>&1; then
+        log_info "Installing yq from GitHub releases..."
+        YQ_VERSION="v4.35.2"
+        curl -L "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o ~/.local/bin/yq
+        chmod +x ~/.local/bin/yq
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+
+    # Install btop separately (might not be available in older Ubuntu versions)
+    if ! command -v btop >/dev/null 2>&1; then
+        log_info "btop not available in repositories, using htop instead"
+    fi
     
-    # Setup Oh My Zsh (optional)
-    if [[ ! -d ~/.oh-my-zsh ]]; then
+    # Setup Oh My Zsh (optional, skip in containers)
+    if [[ "$is_container" == "false" && ! -d ~/.oh-my-zsh ]]; then
         log_info "Installing Oh My Zsh..."
-        sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended || true
+        if sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended 2>/dev/null; then
+            log_success "Oh My Zsh installed successfully"
+        else
+            log_warn "Oh My Zsh installation failed, continuing without it"
+        fi
+    elif [[ "$is_container" == "true" ]]; then
+        log_info "Skipping Oh My Zsh installation in container environment"
+    else
+        log_info "Oh My Zsh already installed"
     fi
     
     # Create enhanced shell configuration
@@ -253,18 +292,35 @@ setup_language_servers() {
 # -------------------------------------------------------------------------
 setup_development_tools() {
     log_info "Setting up development tools..."
-    
+
+    # Check if we're in a container environment
+    local is_container=false
+    if [[ -f /.dockerenv ]] || [[ -n "${CONTAINER:-}" ]] || [[ "$(hostname)" =~ ^[0-9a-f]{12}$ ]]; then
+        is_container=true
+    fi
+
     # Database clients
     sudo apt-get install -y \
         mysql-client postgresql-client \
-        redis-tools mongodb-clients
+        redis-tools mongodb-clients || {
+        log_warn "Some database clients failed to install, continuing..."
+    }
     
     # API testing tools
     sudo apt-get install -y curl httpie
     
-    # Container tools
-    sudo apt-get install -y docker.io docker-compose
-    sudo usermod -aG docker $USER || true
+    # Container tools (skip in container environments)
+    if [[ "$is_container" == "false" ]]; then
+        log_info "Installing Docker tools..."
+        sudo apt-get install -y docker.io docker-compose || {
+            log_warn "Docker installation failed, continuing without Docker"
+        }
+        sudo usermod -aG docker $USER 2>/dev/null || {
+            log_warn "Could not add user to docker group"
+        }
+    else
+        log_info "Skipping Docker installation in container environment"
+    fi
     
     # Build tools
     sudo apt-get install -y \
